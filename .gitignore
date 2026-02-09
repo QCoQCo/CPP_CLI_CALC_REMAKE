@@ -1,0 +1,20 @@
+# Build directories
+build/
+bin/
+*.o
+*.out
+
+# Executables
+calculator
+calc
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
