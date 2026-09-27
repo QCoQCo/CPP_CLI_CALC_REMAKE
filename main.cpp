@@ -6,6 +6,15 @@
 #include <vector>
 #include <cmath>
 #include <cctype>
+#include <iomanip>
+#include <unordered_set>
+
+static inline std::string trim(const std::string& s) {
+    size_t first = s.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = s.find_last_not_of(" \t\r\n");
+    return s.substr(first, last - first + 1);
+}
 
 // ---------- 토큰 & 렉서 ----------
 enum class TokenType { NUMBER, IDENT, OP, LPAREN, RPAREN, COMMA, ASSIGN, END };
@@ -34,21 +43,40 @@ public:
             ++pos;
             return {TokenType::OP, 0, std::string(1, c)};
         }
-        if (std::isdigit(c) || c == '.') {
+        if (std::isdigit(static_cast<unsigned char>(c)) || c == '.') {
             size_t start = pos;
-            while (pos < input.size() && (std::isdigit(input[pos]) || input[pos] == '.')) ++pos;
+            while (pos < input.size() && (std::isdigit(static_cast<unsigned char>(input[pos])) || input[pos] == '.')) ++pos;
+
+            // 지수 표기법 지원 (e.g. 1e5, 1.5e-3, 2E+4)
+            if (pos < input.size() && (input[pos] == 'e' || input[pos] == 'E')) {
+                size_t nextPos = pos + 1;
+                if (nextPos < input.size() && (input[nextPos] == '+' || input[nextPos] == '-')) {
+                    nextPos++;
+                }
+                if (nextPos < input.size() && std::isdigit(static_cast<unsigned char>(input[nextPos]))) {
+                    pos = nextPos;
+                    while (pos < input.size() && std::isdigit(static_cast<unsigned char>(input[pos]))) {
+                        ++pos;
+                    }
+                }
+            }
+
             std::string numStr = input.substr(start, pos - start);
             double v = 0;
+            size_t idx = 0;
             try {
-                v = std::stod(numStr);
+                v = std::stod(numStr, &idx);
             } catch (...) {
+                throw std::runtime_error("Invalid number: " + numStr);
+            }
+            if (idx != numStr.size()) {
                 throw std::runtime_error("Invalid number: " + numStr);
             }
             return {TokenType::NUMBER, v, numStr};
         }
-        if (std::isalpha(c) || c == '_') {
+        if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
             size_t start = pos;
-            while (pos < input.size() && (std::isalnum(input[pos]) || input[pos] == '_')) ++pos;
+            while (pos < input.size() && (std::isalnum(static_cast<unsigned char>(input[pos])) || input[pos] == '_')) ++pos;
             return {TokenType::IDENT, 0, input.substr(start, pos - start)};
         }
         throw std::runtime_error(std::string("Unexpected character: ") + c);
@@ -76,15 +104,9 @@ public:
     }
     double parse() {
         double r = parseExpr();
-        if (current.type != TokenType::END && current.type != TokenType::ASSIGN && current.type != TokenType::RPAREN && current.type != TokenType::COMMA)
-            throw std::runtime_error("Unexpected token");
+        if (current.type != TokenType::END)
+            throw std::runtime_error("Unexpected token: " + (current.text.empty() ? "end of input" : current.text));
         return r;
-    }
-    bool isAssignment() const {
-        return current.type == TokenType::IDENT;
-    }
-    std::string getAssignName() const {
-        return current.type == TokenType::IDENT ? current.text : "";
     }
 };
 
@@ -95,6 +117,7 @@ double Parser::parseExpr() {
         advance();
         double right = parseTerm();
         left = (op == "+") ? (left + right) : (left - right);
+        if (!std::isfinite(left)) throw std::runtime_error("Math error: result is not finite");
     }
     return left;
 }
@@ -110,6 +133,7 @@ double Parser::parseTerm() {
             if (right == 0) throw std::runtime_error("Division by zero!");
             left = left / right;
         }
+        if (!std::isfinite(left)) throw std::runtime_error("Math error: result is not finite");
     }
     return left;
 }
@@ -125,7 +149,9 @@ double Parser::parseFactor() {
     if (current.type == TokenType::OP && current.text == "^") {
         advance();
         double exp = parseFactor();
-        return std::pow(base, exp);
+        double res = std::pow(base, exp);
+        if (!std::isfinite(res)) throw std::runtime_error("Math error: result is not finite");
+        return res;
     }
     return base;
 }
@@ -134,28 +160,31 @@ double Parser::parseFunction(const std::string& name) {
     if (current.type != TokenType::LPAREN) throw std::runtime_error("Expected '(' after " + name);
     advance(); // consume '('
     double x = parseExpr();
+    double res = 0;
     if (name == "pow") {
         if (current.type != TokenType::COMMA) throw std::runtime_error("pow(x,y) requires two arguments");
         advance();
         double y = parseExpr();
         if (current.type != TokenType::RPAREN) throw std::runtime_error("Expected ')'");
         advance();
-        return std::pow(x, y);
+        res = std::pow(x, y);
+    } else {
+        if (current.type != TokenType::RPAREN) throw std::runtime_error("Expected ')'");
+        advance(); // consume ')'
+        if (name == "sqrt") {
+            if (x < 0) throw std::runtime_error("sqrt of negative number");
+            res = std::sqrt(x);
+        } else if (name == "sin") res = std::sin(x);
+        else if (name == "cos") res = std::cos(x);
+        else if (name == "tan") res = std::tan(x);
+        else if (name == "log" || name == "ln") res = std::log(x);
+        else if (name == "log10") res = std::log10(x);
+        else if (name == "exp") res = std::exp(x);
+        else if (name == "abs") res = std::fabs(x);
+        else throw std::runtime_error("Unknown function: " + name);
     }
-    if (current.type != TokenType::RPAREN) throw std::runtime_error("Expected ')'");
-    advance(); // consume ')'
-    if (name == "sqrt") {
-        if (x < 0) throw std::runtime_error("sqrt of negative number");
-        return std::sqrt(x);
-    }
-    if (name == "sin") return std::sin(x);
-    if (name == "cos") return std::cos(x);
-    if (name == "tan") return std::tan(x);
-    if (name == "log" || name == "ln") return std::log(x);
-    if (name == "log10") return std::log10(x);
-    if (name == "exp") return std::exp(x);
-    if (name == "abs") return std::fabs(x);
-    throw std::runtime_error("Unknown function: " + name);
+    if (!std::isfinite(res)) throw std::runtime_error("Math error: result is not finite");
+    return res;
 }
 
 double Parser::parseBase() {
@@ -181,66 +210,71 @@ double Parser::parseBase() {
         advance();
         return v;
     }
-    throw std::runtime_error("Expected number, variable, or '('");
+    throw std::runtime_error("Unexpected token: " + (current.text.empty() ? "end of input" : current.text));
 }
 
 // ---------- 계산기 (변수·히스토리·특수 명령) ----------
 class Calculator {
     std::map<std::string, double> variables_;
     std::vector<std::string> history_;
-    double lastResult_ = 0;
-    bool hasResult_ = false;
 
     static bool isValidVarName(const std::string& s) {
         if (s.empty()) return false;
-        if (!std::isalpha(s[0]) && s[0] != '_') return false;
+        if (!std::isalpha(static_cast<unsigned char>(s[0])) && s[0] != '_') return false;
         for (size_t i = 1; i < s.size(); ++i)
-            if (!std::isalnum(s[i]) && s[i] != '_') return false;
+            if (!std::isalnum(static_cast<unsigned char>(s[i])) && s[i] != '_') return false;
         return true;
     }
 
-public:
-    double eval(const std::string& input) {
-        std::string cleaned;
-        for (char c : input) {
-            if (c != ' ' && c != '\t') cleaned += c;
-        }
-        if (cleaned.empty()) throw std::runtime_error("Empty input");
+    static bool isReserved(const std::string& s) {
+        static const std::unordered_set<std::string> reserved = {
+            "sin", "cos", "tan", "sqrt", "log", "ln", "log10", "exp", "abs", "pow",
+            "history", "vars", "quit", "exit", "q",
+            "pi", "e", "ans"
+        };
+        return reserved.find(s) != reserved.end();
+    }
 
-        size_t eq = cleaned.find('=');
-        if (eq != std::string::npos && eq > 0 && eq < cleaned.size() - 1) {
-            std::string left = cleaned.substr(0, eq);
-            std::string right = cleaned.substr(eq + 1);
+public:
+    Calculator() {
+        variables_["pi"] = 3.14159265358979323846;
+        variables_["e"] = 2.71828182845904523536;
+    }
+
+    double eval(const std::string& input) {
+        std::string trimmed = trim(input);
+        if (trimmed.empty()) throw std::runtime_error("Empty input");
+
+        size_t eq = input.find('=');
+        if (eq != std::string::npos) {
+            std::string left = trim(input.substr(0, eq));
+            std::string right = trim(input.substr(eq + 1));
             if (isValidVarName(left)) {
+                if (isReserved(left)) {
+                    throw std::runtime_error("Cannot assign to reserved word: " + left);
+                }
                 Parser rightParser(right, variables_);
                 double value = rightParser.parse();
                 variables_[left] = value;
                 variables_["ans"] = value;
-                lastResult_ = value;
-                hasResult_ = true;
                 return value;
             }
         }
 
-        Parser parser(cleaned, variables_);
-        if (hasResult_) variables_["ans"] = lastResult_;
+        Parser parser(input, variables_);
         double result = parser.parse();
-        lastResult_ = result;
-        hasResult_ = true;
         variables_["ans"] = result;
         return result;
     }
 
     void addHistory(const std::string& expr, double result) {
         std::ostringstream oss;
-        oss << expr << " = " << result;
+        oss << expr << " = " << std::setprecision(12) << result;
         history_.push_back(oss.str());
         if (history_.size() > 100) history_.erase(history_.begin());
     }
     const std::vector<std::string>& history() const { return history_; }
     std::map<std::string, double>& variables() { return variables_; }
-    double lastResult() const { return lastResult_; }
-    bool hasResult() const { return hasResult_; }
 };
 
 // ---------- 메인 루프 (history, vars 명령) ----------
@@ -249,23 +283,23 @@ int main() {
     std::string input;
 
     std::cout << "=== C++ CLI Calculator ===" << std::endl;
-    std::cout << "Expressions: 5+3, (1+2)*3, sin(0), x=10, ans+1" << std::endl;
+    std::cout << "Expressions: 5+3, (1+2)*3, sin(0), x=10, ans+1, 1e5" << std::endl;
+    std::cout << "Constants: pi, e" << std::endl;
     std::cout << "Functions: sin, cos, tan, sqrt, log, ln, log10, exp, abs, pow(x,y)" << std::endl;
     std::cout << "Commands: history, vars, quit" << std::endl;
     std::cout << std::endl;
 
     while (true) {
         std::cout << "> ";
-        std::getline(std::cin, input);
+        if (!std::getline(std::cin, input)) break;
 
-        if (input == "quit" || input == "exit" || input == "q") {
+        std::string trimmed = trim(input);
+        if (trimmed.empty()) continue;
+
+        if (trimmed == "quit" || trimmed == "exit" || trimmed == "q") {
             std::cout << "Goodbye!" << std::endl;
             break;
         }
-
-        std::string trimmed;
-        for (char c : input) if (c != ' ' && c != '\t') trimmed += c;
-        if (trimmed.empty()) continue;
 
         if (trimmed == "history") {
             const auto& h = calc.history();
@@ -275,14 +309,14 @@ int main() {
         }
         if (trimmed == "vars") {
             for (const auto& p : calc.variables())
-                std::cout << "  " << p.first << " = " << p.second << std::endl;
+                std::cout << "  " << p.first << " = " << std::setprecision(12) << p.second << std::endl;
             continue;
         }
 
         try {
             double result = calc.eval(input);
             calc.addHistory(trimmed, result);
-            std::cout << "Result: " << result << std::endl;
+            std::cout << "Result: " << std::setprecision(12) << result << std::endl;
         } catch (const std::exception& e) {
             std::cout << "Error: " << e.what() << std::endl;
         }
@@ -290,4 +324,3 @@ int main() {
 
     return 0;
 }
-
