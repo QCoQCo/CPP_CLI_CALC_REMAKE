@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 echo "=== Building calculator ==="
 make
 
-CALC="./calculator"
+CALC="${CALC:-./calculator}"
 FAILED=0
 TOTAL=0
 
@@ -15,13 +15,12 @@ run_test() {
     local name="$1"
     local input="$2"
     local expected_pattern="$3"
-    local should_fail="${4:-false}"
-    
+
     TOTAL=$((TOTAL + 1))
-    
+
     # 2초 타임아웃을 걸어 무한 루프 방지
-    local output
-    if ! output=$(python3 -c "
+    local output ret=0
+    output=$(python3 -c "
 import subprocess, sys
 p = subprocess.Popen(['$CALC'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 try:
@@ -30,13 +29,12 @@ try:
 except subprocess.TimeoutExpired:
     p.kill()
     sys.exit(124)
-" 2>&1); then
-        local ret=$?
-        if [ $ret -eq 124 ]; then
-            echo "❌ [$name] FAIL (Timeout / Infinite loop)"
-            FAILED=$((FAILED + 1))
-            return
-        fi
+" 2>&1) || ret=$?
+
+    if [ $ret -eq 124 ]; then
+        echo "❌ [$name] FAIL (Timeout / Infinite loop)"
+        FAILED=$((FAILED + 1))
+        return
     fi
 
     if echo "$output" | grep -E "$expected_pattern" > /dev/null; then
@@ -69,7 +67,8 @@ run_test "B1: EOF Handling" "1+1\n" "Result: 2"
 run_test "B2: Trailing RPAREN" "1+2)\nquit\n" "Error:"
 run_test "B2: Trailing COMMA" "1,2\nquit\n" "Error:"
 run_test "B2: Trailing ASSIGN in expr" "1+2=5\nquit\n" "Error:"
-run_test "B2: Trailing RPAREN in assign" "x=5)\nvars\nquit\n" "Error:"
+run_test "B2: Trailing RPAREN in assign" "x=5)\nquit\n" "Error:"
+run_test "B2: Failed assign keeps value" "x=1\nx=5)\nx+100\nquit\n" "Result: 101$"
 
 # 4. B3: 공백 처리 검증
 run_test "B3: Separated numbers error" "1 2\nquit\n" "Error:"
@@ -85,7 +84,7 @@ run_test "B5: Leading space quit" " quit\n" "Goodbye!"
 run_test "B5: Space in command should not match" "his tory\nquit\n" "Error:"
 
 # 7. B6: UTF-8 멀티바이트 안전성 검증
-run_test "B6: UTF-8 character error" "x=3한\nquit\n" "Error:"
+run_test "B6: UTF-8 character error" "x=3한\nquit\n" "Error: Unexpected character: 한$"
 
 # 8. P3 개선 사항 검증
 run_test "I1: Domain error log(0)" "log(0)\nquit\n" "Error:"
@@ -94,7 +93,8 @@ run_test "I1: Domain error 0^-1" "0^-1\nquit\n" "Error:"
 run_test "I1: Overflow multiply" "1e308*10\nquit\n" "Error:"
 run_test "I1: Overflow add" "1e308+1e308\nquit\n" "Error:"
 run_test "I1: Overflow in subexpression" "1/(1e308*10)\nquit\n" "Error:"
-run_test "I2: High precision" "1234567\nquit\n" "Result: 1234567"
+run_test "I2: High precision" "1234567\nquit\n" "Result: 1234567$"
+run_test "I2: Negative zero" "-0\nquit\n" "Result: 0$"
 run_test "I3: Scientific notation" "1e5\nquit\n" "Result: 100000"
 run_test "I3: Scientific notation with sign" "1.5e-3\nquit\n" "Result: 0.0015"
 run_test "I4: Built-in constants" "pi\nquit\n" "Result: 3.14159"

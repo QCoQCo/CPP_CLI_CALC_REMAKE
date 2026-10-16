@@ -79,7 +79,23 @@ public:
             while (pos < input.size() && (std::isalnum(static_cast<unsigned char>(input[pos])) || input[pos] == '_')) ++pos;
             return {TokenType::IDENT, 0, input.substr(start, pos - start)};
         }
-        throw std::runtime_error(std::string("Unexpected character: ") + c);
+        throw std::runtime_error("Unexpected character: " + currentChar());
+    }
+
+private:
+    // pos 위치의 문자를 UTF-8 문자 단위로 반환 (잘못된 시퀀스면 1바이트)
+    std::string currentChar() const {
+        unsigned char lead = static_cast<unsigned char>(input[pos]);
+        size_t len = 1;
+        if (lead >= 0xC2 && lead <= 0xDF) len = 2;
+        else if (lead >= 0xE0 && lead <= 0xEF) len = 3;
+        else if (lead >= 0xF0 && lead <= 0xF4) len = 4;
+        if (len > 1) {
+            if (pos + len > input.size()) len = 1;
+            for (size_t i = 1; i < len; ++i)
+                if ((static_cast<unsigned char>(input[pos + i]) & 0xC0) != 0x80) { len = 1; break; }
+        }
+        return input.substr(pos, len);
     }
 };
 
@@ -235,6 +251,9 @@ class Calculator {
         return reserved.find(s) != reserved.end();
     }
 
+    // -0을 0으로 바꿔 "-0"이 출력되지 않게 함
+    static double normalizeZero(double v) { return v == 0 ? 0.0 : v; }
+
 public:
     Calculator() {
         variables_["pi"] = 3.14159265358979323846;
@@ -254,7 +273,7 @@ public:
                     throw std::runtime_error("Cannot assign to reserved word: " + left);
                 }
                 Parser rightParser(right, variables_);
-                double value = rightParser.parse();
+                double value = normalizeZero(rightParser.parse());
                 variables_[left] = value;
                 variables_["ans"] = value;
                 return value;
@@ -262,7 +281,7 @@ public:
         }
 
         Parser parser(input, variables_);
-        double result = parser.parse();
+        double result = normalizeZero(parser.parse());
         variables_["ans"] = result;
         return result;
     }
